@@ -1,6 +1,6 @@
-# kickstarter_survival
-Kickstarter Survival Analysis
+# Breast Cancer Survival
+Breast Cancer Survival Analysis
 
 # Dataset
 
-From [kaggle](https://www.kaggle.com/datasets/kemical/kickstarter-projects)
+From [kaggle](https://www.kaggle.com/code/meisamomidi/prediction-of-breast-cancer-survival)
