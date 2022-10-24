@@ -1,0 +1,153 @@
+---
+title: "Breast_cancer"
+output: html_document
+date: "2022-10-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load library
+```{r}
+library(tidyverse)
+```
+
+# Load the dataset
+```{r}
+df <- read.csv("METABRIC_RNA_Mutation.csv")
+```
+## Context 
+
+
+
+## Subset the dataset
+```{r}
+# Keep the first 31 clinical features
+df <- df[0:31]
+str(df)
+```
+```{r}
+features <- c("patient_id", "age_at_diagnosis", "type_of_breast_surgery", "cancer_type", "chemotherapy", "neoplasm_histologic_grade", "hormone_therapy", "inferred_menopausal_state", "primary_tumor_laterality", "overall_survival_months", "radio_therapy", "tumor_size" , "tumor_stage", "death_from_cancer" )
+```
+
+```{r}
+df_subset <- df[,features]
+str(df_subset)
+```
+
+```{r}
+summary(df_subset)
+```
+
+# Convention for the status
+
+We want to change the columns
+0: living or died from other causes
+1: died because of the cancer
+
+```{r}
+df_subset <- df_subset %>%
+  rename(status = "death_from_cancer",
+         duration= "overall_survival_months")%>%
+  mutate(
+    status = ifelse(status == "Died of Disease", 1, 0)
+  )
+  
+  
+```
+
+# Overall non parametric survival analysis
+
+```{r}
+## Nelson-AAlen estimator
+fit_na <- survfit(Surv(duration, status) ~ 1, data = df_subset, type = "fh")
+plot(fit_na, 
+     main ="Nelson Aalen survival estimator",
+     xlab = "Months",
+     ylab= "Survival function")
+```
+
+```{r}
+fit_na
+```
+
+> We notice from this survival analysis there are 50% of surivals after 286 months.
+
+
+
+
+## Kaplan-meier with one features and 2 groups: chemiotherapy
+
+```{r}
+surv_chem <- survfit(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+plot(surv_chem, col= (1:2), main ="Kaplan-Meier", xlab = "Months", ylab = "Survival function")
+legend("topright", legend= names(surv_chem$strata),
+       col=c("black", "red"), lty=1)
+#summary(surv_chem)
+```
+
+```{r}
+surv_chem
+```
+> We can observe it seems there is a difference between the 2 groups. indeed, people without any chemiotherapy tend to survive longer  50 % of survivals after 301 months against 147 for people with chemiotherapy.
+Let's have a look on the significance of this difference with a LogRank.
+
+## LogRank
+
+Let's define the null hypothesis H0 : the two groups have the same survival distributions.
+
+```{r}
+logrank_chem <- survdiff(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+logrank_chem
+```
+
+> The p-value is << before 0.05. So we can reject the null hypothesis and accept there is a significance difference between the two groups.
+Now we will look at an additibve model by includeing with the chemotherapy the raio therapy.
+
+## Kaplan Meir fit with chemotherapy and radio therapy
+
+```{r}
+multiple_fit_km <- survfit(Surv(duration, status ) ~ chemotherapy + radio_therapy, data = df_subset)
+multiple_fit_km
+```
+
+```{r}
+plot(multiple_fit_km, col= (1:4), main ="Kaplan-Meier", xlab = "Months", ylab = "Survival functions")
+legend("topright", legend= names(multiple_fit_km$strata),
+       col=c(1:4), lty=1 )
+```
+We can observe in this additive model 4 groups:
+*   without chemotherapy and without radio therapy: black line
+*   without chemotherapy and with radio therapy: red
+*   with chemotherapy and without radio therapy: green
+*   with chemotherapy and with radio therapy: blue
+
+
+From this plot we may have a doubt on the significance difference between the group in red (without chemotherapy and with radio therapy) and the one in black ( without chemotherapy and without radio therapy) as there are close together.
+Let's do a log rank test.
+
+```{r}
+logrank_multiple <- survdiff(Surv(duration, status ) ~ chemotherapy + strata(radio_therapy), data = df_subset)
+```
+
+```{r}
+logrank_multiple
+```
+
+```{r}
+survdiff(Surv(duration, status ) ~ chemotherapy[0] + radio_therapy[0], data = df_subset
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
