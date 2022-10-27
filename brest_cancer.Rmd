@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Load library
 ```{r}
 library(tidyverse)
+library(survival)
 ```
 
 # Load the dataset
@@ -27,6 +28,8 @@ df <- read.csv("METABRIC_RNA_Mutation.csv")
 df <- df[0:31]
 str(df)
 ```
+## Keep the feature of interest
+
 ```{r}
 features <- c("patient_id", "age_at_diagnosis", "type_of_breast_surgery", "cancer_type", "chemotherapy", "neoplasm_histologic_grade", "hormone_therapy", "inferred_menopausal_state", "primary_tumor_laterality", "overall_survival_months", "radio_therapy", "tumor_size" , "tumor_stage", "death_from_cancer" )
 ```
@@ -35,6 +38,27 @@ features <- c("patient_id", "age_at_diagnosis", "type_of_breast_surgery", "cance
 df_subset <- df[,features]
 str(df_subset)
 ```
+## Review duration values
+
+```{r}
+# Check if there is NA
+sum(is.na(df_subset$overall_survival_months))
+
+# plot the survival
+hist(df_subset$overall_survival_months)
+```
+
+
+## remove empty and NA values
+
+```{r}
+table(df_subset$type_of_breast_surgery)
+
+df_subset <- df_subset[df_subset$type_of_breast_surgery %in% c('BREAST CONSERVING','MASTECTOMY'),]
+df_subset <- drop_na(df_temp)
+
+```
+
 
 ```{r}
 summary(df_subset)
@@ -105,6 +129,7 @@ logrank_chem
 > The p-value is << before 0.05. So we can reject the null hypothesis and accept there is a significance difference between the two groups.
 Now we will look at an additibve model by includeing with the chemotherapy the raio therapy.
 
+
 ## Kaplan Meir fit with chemotherapy and radio therapy
 
 ```{r}
@@ -136,18 +161,77 @@ logrank_multiple
 ```
 
 ```{r}
-survdiff(Surv(duration, status ) ~ chemotherapy[0] + radio_therapy[0], data = df_subset
+#survdiff(Surv(duration, status ) ~ chemotherapy[0] + radio_therapy[0], data = df_subset)
 ```
 
+# Parametric survival analysis
 
+## Cox Analys with one features and multiple groups: 
 
+Let's review the dataset
+```{r}
+head(df_subset)
+```
+We will look at the tumor stage variable:
 
+```{r}
+boxplot(df_subset_relevelled$duration ~ df_subset_relevelled$tumor_stage,xlab='Tumor Stage', ylab='Survival time (months)', main='Survival by Tumor Stage')
+```
 
+Let's review the number of elements per groups
+```{r}
+table(df_subset$tumor_stage) # show number of elements per group
+```
+Let's first define the reference level.
+Stage0 being a small group (4) there is a chance that it will impact the significance of the comparaison with the other groups.
+This is confirmed by the following analysis where the pvalue of all groups is high (>>0.05).
 
+```{r}
+df_subset_relevelled <- df_subset |> 
+  #mutate(tumor_stage = ifelse(tumor_stage %in% c(0,4), 'other', tumor_stage)) |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '0'))
 
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset_relevelled)
+summary(level.cph)
+```
 
-
-
+It will make more sense to choose Stage1 as a reference.
 
 
 ```{r}
+df_subset_relevelled <- df_subset |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '1')) # explicitly define stage1 as the reference
+
+levels(df_subset_relevelled$tumor_stage) # display the level
+```
+Let's analyse the tumor_stage compare to group '1'
+
+```{r}
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset_relevelled)
+summary(level.cph)
+```
+We can observe:
+  * Stage0 has a high pvalue, so we cannot ignore the null hypothesis for this group.
+  * Stage2, Stage3 and Stage4 has a small pvalue (<0.05), so their difference is significant.
+  * for Stage2, Stage3 and Stage4 $\beta$ is positive so there a higher risk for these groups compare to Stage1 group
+  * There is 2.3[1.6, 2.5] more risk for Stage2, 4.6[3.4, 6.3] for Stage3 and 9.3[4.5, 19.2] for Stage4 to die compare to Stage1.
+  * The confidence interval of Stage4 is higher than for Stage2 and Stage3, possibly due to the low number of elements in group.
+
+```{r}
+table(df_subset$cancer_type)
+table(df_subset$type_of_breast_surgery)
+```
+```{r}
+summary(df_subset_relevelled)
+```
+
+
+```{r}
+coxph(Surv(duration, status) ~ cancer_type+type_of_breast_surgery+cancer_type:type_of_breast_surgery, data = df_subset) |> summary()
+
+
+coxph(Surv(duration, status) ~ cancer_type*type_of_breast_surgery, data = df_subset) |> summary()
+```
+
