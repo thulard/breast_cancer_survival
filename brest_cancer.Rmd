@@ -227,11 +227,10 @@ table(df_subset$type_of_breast_surgery)
 summary(df_subset_relevelled)
 ```
 
+# Misc. Notes
 
 ```{r}
 coxph(Surv(duration, status) ~ cancer_type+type_of_breast_surgery+cancer_type:type_of_breast_surgery, data = df_subset) |> summary()
-
-
 coxph(Surv(duration, status) ~ cancer_type*type_of_breast_surgery, data = df_subset) |> summary()
 ```
 
