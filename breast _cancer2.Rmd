@@ -1,0 +1,262 @@
+---
+title: "Breast_cancer"
+output: html_document
+date: "2022-10-24"
+---
+
+# question
+Find the best treatment corresponding of the patient situation. ..à  reformuler  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load library
+```{r}
+library(tidyverse)
+library(survival)
+```
+
+# Load the dataset
+```{r}
+df <- read.csv("METABRIC_RNA_Mutation.csv")
+```
+## Context 
+
+
+
+## Subset the dataset
+```{r}
+# Keep the first 31 clinical features
+df <- df[0:31]
+str(df)
+```
+## Keep the feature of interest
+
+```{r}
+features <- c("patient_id", "age_at_diagnosis", "type_of_breast_surgery", "cancer_type_detailed", "chemotherapy", "hormone_therapy", "primary_tumor_laterality", "overall_survival_months", "radio_therapy","tumor_stage", "death_from_cancer" )
+```
+
+```{r}
+df_subset <- df[,features]
+str(df_subset)
+```
+## Review duration values
+
+```{r}
+# Check if there is NA
+sum(is.na(df_subset$overall_survival_months))
+
+# plot the survival
+hist(df_subset$overall_survival_months)
+```
+
+
+## remove empty and NA values
+
+```{r}
+table(df_subset$type_of_breast_surgery)
+
+df_subset <- df_subset[df_subset$type_of_breast_surgery %in% c('BREAST CONSERVING','MASTECTOMY'),]
+df_subset <- drop_na(df_subset)
+
+```
+
+
+```{r}
+summary(df_subset)
+```
+
+# Convention for the status
+
+We want to change the columns
+0: living or died from other causes
+1: died because of the cancer
+
+```{r}
+df_subset <- df_subset %>%
+  rename(status = "death_from_cancer",
+         duration= "overall_survival_months")%>%
+  mutate(
+    status = ifelse(status == "Died of Disease", 1, 0)
+  )
+  
+  
+```
+
+# Overall non parametric survival analysis
+
+```{r}
+## Nelson-AAlen estimator
+fit_na <- survfit(Surv(duration, status) ~ 1, data = df_subset, type = "fh")
+plot(fit_na, 
+     main ="Nelson Aalen survival estimator",
+     xlab = "Months",
+     ylab= "Survival function")
+```
+
+```{r}
+fit_na
+```
+
+> We notice from this survival analysis there are 50% of surivals after 286 months.
+
+
+
+
+## Kaplan-meier with one features and 2 groups: chemiotherapy
+
+```{r}
+surv_chem <- survfit(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+plot(surv_chem, col= (1:2), main ="Kaplan-Meier", xlab = "Months", ylab = "Survival function")
+legend("topright", legend= names(surv_chem$strata),
+       col=c("black", "red"), lty=1)
+#summary(surv_chem)
+```
+
+```{r}
+surv_chem
+```
+> We can observe it seems there is a difference between the 2 groups. indeed, people without any chemiotherapy tend to survive longer  50 % of survivals after 301 months against 147 for people with chemiotherapy.
+Let's have a look on the significance of this difference with a LogRank.
+
+## LogRank
+
+Let's define the null hypothesis H0 : the two groups have the same survival distributions.
+
+```{r}
+logrank_chem <- survdiff(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+logrank_chem
+```
+
+> The p-value is << before 0.05. So we can reject the null hypothesis and accept there is a significance difference between the two groups.
+Now we will look at an additibve model by includeing with the chemotherapy the raio therapy.
+
+
+## Kaplan Meir fit with chemotherapy and radio therapy
+
+```{r}
+multiple_fit_km <- survfit(Surv(duration, status ) ~ chemotherapy + radio_therapy, data = df_subset)
+multiple_fit_km
+```
+
+```{r}
+plot(multiple_fit_km, col= (1:4), main ="Kaplan-Meier", xlab = "Months", ylab = "Survival functions")
+legend("topright", legend= names(multiple_fit_km$strata),
+       col=c(1:4), lty=1 )
+```
+We can observe in this additive model 4 groups:
+*   without chemotherapy and without radio therapy: black line
+*   without chemotherapy and with radio therapy: red
+*   with chemotherapy and without radio therapy: green
+*   with chemotherapy and with radio therapy: blue
+
+
+From this plot we may have a doubt on the significance difference between the group in red (without chemotherapy and with radio therapy) and the one in black ( without chemotherapy and without radio therapy) as there are close together.
+Let's do a log rank test.
+
+```{r}
+logrank_multiple <- survdiff(Surv(duration, status ) ~ chemotherapy + strata(radio_therapy), data = df_subset)
+```
+
+```{r}
+logrank_multiple
+```
+
+```{r}
+#survdiff(Surv(duration, status ) ~ chemotherapy[0] + radio_therapy[0], data = df_subset)
+```
+# Conclusion for categorical features
+
+# Parametric survival analysis
+
+## Cox Analys with one features and multiple groups: 
+
+Let's review the dataset
+```{r}
+head(df_subset)
+```
+We will look at the tumor stage variable:
+
+```{r}
+boxplot(df_subset$duration ~ df_subset$tumor_stage,xlab='Tumor Stage', ylab='Survival time (months)', main='Survival by Tumor Stage')
+```
+
+Let's review the number of elements per groups
+```{r}
+table(df_subset$tumor_stage) # show number of elements per group
+```
+Let's first define the reference level.
+Stage0 being a small group (4) there is a chance that it will impact the significance of the comparaison with the other groups.
+This is confirmed by the following analysis where the pvalue of all groups is high (>>0.05).
+
+```{r}
+df_subset_relevelled <- df_subset |> 
+  #mutate(tumor_stage = ifelse(tumor_stage %in% c(0,4), 'other', tumor_stage)) |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '0'))
+
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset_relevelled)
+summary(level.cph)
+```
+
+It will make more sense to choose Stage1 as a reference.
+
+
+```{r}
+df_subset <- df_subset |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '1')) # explicitly define stage1 as the reference
+
+levels(df_subset_relevelled$tumor_stage) # display the level
+```
+Let's analyse the tumor_stage compare to group '1'
+
+```{r}
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset_relevelled)
+summary(level.cph)
+```
+We can observe:
+  * Stage0 has a high pvalue, so we cannot ignore the null hypothesis for this group.
+  * Stage2, Stage3 and Stage4 has a small pvalue (<0.05), so their difference is significant.
+  * for Stage2, Stage3 and Stage4 $\beta$ is positive so there a higher risk for these groups compare to Stage1 group
+  * There is 2.3[1.6, 2.5] more risk for Stage2, 4.6[3.4, 6.3] for Stage3 and 9.3[4.5, 19.2] for Stage4 to die compare to Stage1.
+  * The confidence interval of Stage4 is higher than for Stage2 and Stage3, possibly due to the low number of elements in group.
+
+```{r}
+table(df_subset$cancer_type)
+table(df_subset$type_of_breast_surgery)
+```
+```{r}
+summary(df_subset_relevelled)
+```
+
+# Misc. Notes
+We want to level the variable type of breast surgery, will put breast conservering as the reference level (0)
+
+```{r}
+df_subset <- df_subset |> 
+  #mutate(type_of_breast_surgery  = ifelse(tumor_stage %in% c(0,4), 'other', tumor_stage)) |> 
+  mutate(type_of_breast_surgery  = factor(type_of_breast_surgery )) |>
+  mutate(type_of_breast_surgery = relevel(type_of_breast_surgery , ref = 'BREAST CONSERVING'))
+table(df_subset$type_of_breast_surgery)
+```
+
+type_of_breast_surgery
+
+
+```{r}
+
+coxph(Surv(duration, status) ~ type_of_breast_surgery + chemotherapy + hormone_therapy + radio_therapy, data = df_subset) |> summary()
+```
+# Variable selection
+In this model, chemotherapy and type of breast surgery mastectomy has p value under 0.05 => significant impact. It increases the risk of dying respectively by 1.6 and 1.8.
+We need to be careful to infer causality we will have to consider other variables.
+
+```{r}
+coxph(Surv(duration, status) ~ tumor_stage + cancer_type_detailed+ primary_tumor_laterality , data = df_subset) |> summary()
+
+```
+```{r}
+coxph(Surv(duration, status) ~ cancer_type_detailed, data = df_subset) |> summary()
+```
