@@ -38,6 +38,8 @@ df_subset <- df[,features]
 #The type_of_breast_surgery variables should contains only 'BREAST CONSERVING','MASTECTOMY' value, 
 #but we can observe there are 22 blank value (not exactly NA). It is not usable, so will remove them
 df_subset <- df_subset[df_subset$type_of_breast_surgery %in% c('BREAST CONSERVING','MASTECTOMY'),]
+# same is true for primary_tumor_laterality (11 blank value)
+df_subset <- df_subset[df_subset$primary_tumor_laterality %in% c('Left','Right'),]
 df_subset <- drop_na(df_subset)
 
 head(df_subset)
@@ -160,6 +162,7 @@ attr(res.sum, "table")
 ```
 > We can observe it seems there is a difference between the 2 groups. indeed, people without any chemiotherapy tend to survive longer  50 % of survivals after 301 months against 147 for people with chemiotherapy.
 Let's have a look on the significance of this difference with a LogRank.
+
 ## LogRank
 
 Let's define the null hypothesis H0 : the two groups have the same survival distributions.
@@ -170,9 +173,6 @@ logrank_chem
 ```
 
 > The p-value is << before 0.05. So we can reject the null hypothesis and accept there is a significance difference between the two groups.
-Now we will look at an additibve model by includeing with the chemotherapy the raio therapy.
-
-
 
 ## Kaplan Meir analysis for all the binary  variables
 
@@ -184,7 +184,30 @@ Now we will look at an additibve model by includeing with the chemotherapy the r
   
 > Breast side affected: primary_tumor_laterality
 
-**Resume <table TBD here>**
+```{r}
+covariates <- c("type_of_breast_surgery" , "chemotherapy" , "hormone_therapy" , "radio_therapy", "primary_tumor_laterality")
+
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(duration, status)~', x)))
+                        
+univ_km <- lapply(univ_formulas, 
+                   function(x){
+                     logrank_univ <- survdiff(x, data = df_subset)
+                     }
+                   )
+
+univ_km_pvalue <- lapply(univ_km,
+                         function(x){
+                           signif(1 - pchisq(x$chisq, length(x$n) - 1), 2)
+                         }
+                        )
+
+km_table <- t(as.data.frame(univ_km_pvalue, check.names = FALSE))
+colnames(km_table)<-"p.value"
+
+as.data.frame(km_table)
+```
+> Looking at all binary variables, we can observe that only the "type_of_breast_surgery" and the "chemotherapy" have a significan impact on the survival.
 
 ## Kaplan Meir fit with chemotherapy and radio therapy
 
@@ -218,6 +241,7 @@ logrank_multiple
 
 ```{r}
 #survdiff(Surv(duration, status ) ~ chemotherapy[0] + radio_therapy[0], data = df_subset)
+
 ```
 # Conclusion for categorical features
 
