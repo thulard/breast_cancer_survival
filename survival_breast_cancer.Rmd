@@ -1,0 +1,559 @@
+---
+title: "breast_cancer_3"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+date: "2022-11-20"
+---
+
+---
+title: "Breast_cancer"
+output:
+  pdf_document: default
+  html_document: default
+date: "2022-10-24"
+---
+
+# question
+Find the best treatment corresponding of the patient situation. ..à  reformuler  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(survival)
+library(survminer)
+```
+
+# Load the dataset and data cleaning
+
+```{r include=FALSE}
+# load the dataset 
+df <- read.csv("METABRIC_RNA_Mutation.csv")
+# Keep the first 31 clinical features
+df <- df[0:31]
+# Keep the feature of interest
+features <- c("patient_id", "age_at_diagnosis", "type_of_breast_surgery", "cancer_type_detailed", "chemotherapy", "hormone_therapy", "primary_tumor_laterality", "overall_survival_months", "radio_therapy","tumor_stage", "death_from_cancer" )
+# Create a dataframe, df_subset for the anlysis
+df_subset <- df[,features]
+#The type_of_breast_surgery variables should contains only 'BREAST CONSERVING','MASTECTOMY' value, 
+#but we can observe there are 22 blank value (not exactly NA). It is not usable, so will remove them
+df_subset <- df_subset[df_subset$type_of_breast_surgery %in% c('BREAST CONSERVING','MASTECTOMY'),]
+# same is true for primary_tumor_laterality (11 blank value)
+df_subset <- df_subset[df_subset$primary_tumor_laterality %in% c('Left','Right'),]
+df_subset <- drop_na(df_subset)
+head(df_subset)
+```
+
+
+
+For our analysis we have a dataframe with the status "death_from_cancer", the survival time "overall_survival_months" and 9 other features.
+
+Categorical features:
+
+-   hormone_therapy: 0 no therapy, 1 with therapy
+-   primary_tumor_laterality: right/left indicates one which side the cancer appeared
+-   radio_therapy: 0 no therapy, 1 with therapy
+-   tumor_stage: from 0 to 4
+-   chemotherapy: 0 no therapy, 1 with therapy
+-   type_of_breast_surgery: MASTECTOMY fro full ablation, BREAST CONSERVING otherwise
+-   cancer_type_detailed: Breast Invasive Ductal Carcinoma or Breast Mixed Ductal and Lobular Carcinoma, it gives the localisation of the tumor
+-   patient_id
+
+Continuous features:
+
+-   age_at_diagnosis
+-   overall_survival_months
+
+There is no null value for the survival in months variable and the distribution indicates people roughly survive between 0 to 400 months after the breast surgery.
+
+
+
+## Convention for the status
+
+For our categorical features we my need to specify explicitly the level for better explainability.
+
+### Death from cancer convention
+
+We want to change the column
+
+-   0: living or died from other causes
+-   1: died because of the cancer
+
+```{r include=FALSE}
+
+df_subset <- df_subset %>%
+  rename(status = "death_from_cancer",
+         duration= "overall_survival_months")%>%
+  mutate(
+    status = ifelse(status == "Died of Disease", 1, 0)
+  )
+  
+  
+```
+
+### Type of surgery convention
+
+We want to level the variable type of breast surgery, will put breast conserving as the reference level (0)
+
+```{r include=FALSE}
+df_subset <- df_subset |> 
+  #mutate(type_of_breast_surgery  = ifelse(tumor_stage %in% c(0,4), 'other', tumor_stage)) |> 
+  mutate(type_of_breast_surgery  = factor(type_of_breast_surgery )) |>
+  mutate(type_of_breast_surgery = relevel(type_of_breast_surgery , ref = 'BREAST CONSERVING'))
+table(df_subset$type_of_breast_surgery)
+```
+
+# Non parametric survival analysis
+
+## Overall non parametric survival analysis  
+
+Let's have a look on the survival time of the patients.
+
+```{r}
+## Nelson-AAlen estimator
+fit_na <- survfit(Surv(duration, status) ~ 1, data = df_subset, type = "fh")
+plot(fit_na, 
+     main ="Nelson Aalen survival estimator",
+     xlab = "Months",
+     ylab= "Survival function")
+```
+
+```{r include=FALSE}
+summary(fit_na)
+```
+
+We notice from this survival analysis there are 50% of survivals after 286 months.
+
+
+
+## Kaplan-meier with one feature and 2 groups: chemiotherapy
+
+Now we want to analyse the survival time of the patient depending on whether or not they have a chemotherapy.
+
+```{r include=FALSE}
+surv_chem <- survfit(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+plot(surv_chem, col= (1:2), main ="Kaplan-Meier", xlab = "Months", ylab = "Survival function")
+legend("topright", legend= names(surv_chem$strata),
+       col=c("black", "red"), lty=1)
+#summary(surv_chem)
+```
+```{r}
+# Change color, linetype by strata, risk.table color by strata
+ggsurvplot(surv_chem,
+          pval = TRUE, conf.int = TRUE,
+          xlab = "Time in months",
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+```
+
+
+
+```{r}
+# Summary from the survminer package
+res.sum <- surv_summary(surv_chem)
+attr(res.sum, "table")
+```
+We can observe it seems there is a difference between the 2 groups. Indeed, people without any chemotherapy tend to survive longer:  50 % of survivors after 300 months against 179 months for people with chemotherapy.
+
+Let's have a look on the significance of this difference with a LogRank.
+
+## LogRank
+
+Let's define the null hypothesis H0 : the two groups have the same survival distributions.
+
+```{r}
+logrank_chem <- survdiff(Surv(duration, status ) ~ chemotherapy, data = df_subset)
+logrank_chem
+```
+
+The p-value is << before 0.05. So we can reject the null hypothesis and accept there is a significance difference between the two groups.
+
+
+## Kaplan Meier analysis for all the binary variables
+
+We then conduct similar process for the other categorical variables independently and check the p-value from the log rank to test if there is a significant difference between the groups.
+
+Treatments
+-   type_of_breast_surgery
+-   chemotherapy
+-   hormone_therapy
+-   radio_therapy
+  
+Breast side affected: primary_tumor_laterality
+ 
+
+```{r echo=FALSE}
+
+covariates <- c("type_of_breast_surgery" , "chemotherapy" , "hormone_therapy" , "radio_therapy", "primary_tumor_laterality")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(duration, status)~', x)))
+                        
+univ_km <- lapply(univ_formulas, 
+                   function(x){
+                     logrank_univ <- survdiff(x, data = df_subset)
+                     }
+                   )
+univ_km_pvalue <- lapply(univ_km,
+                         function(x){
+                           signif(1 - pchisq(x$chisq, length(x$n) - 1), 2)
+                         }
+                        )
+km_table <- t(as.data.frame(univ_km_pvalue, check.names = FALSE))
+colnames(km_table)<-"p.value"
+as.data.frame(km_table)
+```
+
+Looking at all binary variables, we can observe that only the "type_of_breast_surgery" and the "chemotherapy" have a significant impact on the survival.
+
+
+
+
+# Parametric survival analysis
+
+
+## Defining the best treatement for a designed group of person
+
+The overall goal is to provide recommendation on the most efficient treatment (higher survival in months) for a designed group of person. The design group of person will be done through cox analysis with the use of the features:
+
+1)
+-   age_at_diagnosis
+-   primary_tumor_laterality
+-   tumor stage
+-   cancer_type_detailed
+
+2)
+For the recommendation , we will use the followings treatments:
+ -    type_of_breast_surgery
+ -    chemotherapy
+ -    hormone_therapy
+ -    radio_therapy
+ 
+ 
+### Defining the groups of patients
+
+To define the groups, we will apply a Cox analysis, and check which variables has a significant impact on the survival.
+
+```{r warning=FALSE}
+cox_group <- coxph(Surv(duration, status) ~ age_at_diagnosis + primary_tumor_laterality +  tumor_stage + cancer_type_detailed,  data = df_subset)
+
+summary(cox_group)
+```
+
+It seems the age as continuous variable is not significant on the survival in months (p value = 0.97); Let's check if we change the step for the age_at_diagnosis value from 1 year to 10.
+
+
+> Let's check first quickly the distribution of the age. The feature is continuous.
+
+```{r echo=FALSE}
+hist(df_subset$age_at_diagnosis)
+```
+
+```{r warning=FALSE}
+cox_group_age <- coxph(Surv(duration, status) ~ I(age_at_diagnosis/10) + primary_tumor_laterality +  tumor_stage + cancer_type_detailed,  data = df_subset)
+summary(cox_group_age)
+```
+
+By changing the step of the age variable from one year to ten do not have a  significant impact (p value = 0.97)
+
+Just to confirm, we will have a look on a model using only the Age/10 variable.
+
+```{r}
+coxph(Surv(duration, status) ~ I(age_at_diagnosis/10) ,  data = df_subset) |>
+  summary()
+```
+> It is a bit more significant when using alone (p value = 0.397), but it is far from being significant on the survivals of the patients. We wil remove it from the model.
+
+> Conclusion for the designed group.
+It seems in our additive model (age_at_diagnosis + primary_tumor_laterality +  tumor_stage + cancer_type_detailed) only the tumor stage has an impact on the overall survival. We will use this one to discriminate the groups and select the best treatment, or combination of treatment accordingly the tumor stage.
+
+Let's compute a cox model using only the tumor stage variable.
+
+
+
+### Cox Analys with one features and multiple groups: 
+
+
+We will look at the tumor stage variable:
+
+```{r}
+boxplot(df_subset$duration ~ df_subset$tumor_stage,xlab='Tumor Stage', ylab='Survival time (months)', main='Survival by Tumor Stage')
+```
+
+> We notice there is a trend indicating the more the tumor stage is advanced, the higher the risk for people to die from breast cancer (less months to survive). Let's do a Cox analysis to confirm this hypothesis.
+Let's review the number of elements per groups
+
+```{r}
+table(df_subset$tumor_stage) # show number of elements per group
+```
+
+Let's first define the reference level.
+Stage0 being a small group (4) there is a chance that it will impact the significance of the comparaison with the other groups.
+This is confirmed by the following analysis where the pvalue of all groups is high (>>0.05).
+
+```{r }
+df_subset <- df_subset |> 
+  #mutate(tumor_stage = ifelse(tumor_stage %in% c(0,4), 'other', tumor_stage)) |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '0'))
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset)
+summary(level.cph)
+```
+
+It will make more sense to choose Stage 1 as a reference.
+
+
+```{r}
+df_subset <- df_subset |> 
+  mutate(tumor_stage = factor(tumor_stage)) |>
+  mutate(tumor_stage = relevel(tumor_stage, ref = '1')) # explicitly define stage1 as the reference
+levels(df_subset$tumor_stage) # display the level
+```
+
+Let's analyse the tumor_stage compare to group '1'
+
+```{r}
+level.cph <- coxph(Surv(duration, status) ~ tumor_stage, data = df_subset)
+summary(level.cph)
+```
+We can observe:
+-    Stage0 has a high pvalue, so we cannot ignore the null hypothesis for this group.
+-    Stage2, Stage3 and Stage4 has a small pvalue (<0.05), so their difference is significant.
+_   for Stage2, Stage3 and Stage4 $\beta$ is positive so there a higher risk for these groups compare to Stage1 group
+-   There is 2.0 [1.6, 2.5] more risk for Stage2, 4.5[3.3, 6.2] for Stage3 and 8.5[4.0, 18.3] for Stage4 to die compare to Stage1.
+-   The confidence interval of Stage4 is higher than for Stage2 and Stage3, possibly due to the low number of elements in group.
+
+
+
+## Defining the best treatment according to the tumor stage
+
+
+### Defining the best treatment for patient having a tumor stage 1
+
+By best treatment, we mean a treatment that provides the longer survival in months.
+
+Let's compute our first cox model using all the treatment in an additive model then conduct a variable selection.
+
+```{r}
+cox_group_1 <- coxph(Surv(duration, status) ~ type_of_breast_surgery + chemotherapy + hormone_therapy + radio_therapy, data = df_subset[df_subset$tumor_stage==1,])
+```
+
+```{r}
+summary(cox_group_1)
+```
+> We notice there is only the chemotherapy that has a significant impact (p = 0.0002). Surprisingly, from the analysis we can infer the risk to die from cancer breast is 4 times higher for the patients. 
+
+### Defining the best treatment for patient having a tumor stage 2
+
+By best treatment, we mean a treatment the give the longer survival in months.
+
+Le'ts compute our first cox model using all the treatment in an additive model then conduct a variable selection.
+
+```{r}
+cox_group_2 <- coxph(Surv(duration, status) ~ type_of_breast_surgery + chemotherapy + hormone_therapy + radio_therapy, data = df_subset[df_subset$tumor_stage==2,])
+```
+
+```{r}
+summary(cox_group_2)
+```
+Both the type of breast surgery and chemotherapy have a significant impact p value respectively 0.04 and 0.03). For both of them the risk is increased by 35 %. Hormone therapy is not really far from being significant. Let's create a model with a variable selection with the step AIC algorithm.
+
+Let's see if we can apply a varibale selection on this model.
+
+```{r}
+step(cox_group_2)
+```
+> This time only the type of breast surgery is significant (p = 0.004) but has an negative impact on the survival in months. However The chemotherapy (p value 0.058) and hormone therapy (p value 0.053) are closed from being significant and we can notice this time the hormone therapy decreased the risk to die exp(beta)=0.77<1
+We will keep the final model with only type of breast surgery
+
+```{r}
+cox_group_2 <- coxph(Surv(duration, status) ~ type_of_breast_surgery , data = df_subset[df_subset$tumor_stage==2,])
+cox_group_2
+```
+> Our final model for the group 2 is defined onnly by the treatment of the breast surgery which has a significant impact (p = 0.004) and increased the risk by 48%.
+### Defining the best treatment for patient having a tumor stage 3
+
+By best treatment, we mean a treatment the give the longer survival in months.
+
+Le'ts compute our first cox model using all the treatment in an additive model then conduct a variable selection.
+
+```{r}
+cox_group_3 <- coxph(Surv(duration, status) ~ type_of_breast_surgery + chemotherapy + hormone_therapy + radio_therapy, data = df_subset[df_subset$tumor_stage==3,])
+```
+
+```{r}
+summary(cox_group_3)
+```
+> the type of surgery is closed from being significant (p =0.059) and the hotmone therapy is isgnificant (p=0.019) and decreased the risk beta is 0.29.
+
+```{r include=FALSE}
+covariates <- c("type_of_breast_surgery" , "chemotherapy" , "hormone_therapy" , "radio_therapy")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(duration, status)~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){coxph(x, data = df_subset[df_subset$tumor_stage==3,])})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          x <- summary(x)
+                          p.value<-signif(x$wald["pvalue"], digits=2)
+                          wald.test<-signif(x$wald["test"], digits=2)
+                          beta<-signif(x$coef[1], digits=2);#coeficient beta
+                          HR <-signif(x$coef[2], digits=2);#exp(beta)
+                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
+                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
+                          HR <- paste0(HR, " (", 
+                                       HR.confint.lower, "-", HR.confint.upper, ")")
+                          res<-c(beta, HR, wald.test, p.value)
+                          names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+```
+
+
+### Defining the best treatment for patient having a tumor stage 4
+
+By best treatment, we mean a treatment the give the longer survival in months.
+
+Le'ts compute our first cox model using all the treatment in an additive model then conduct a variable selection.
+
+```{r}
+cox_group_4 <- coxph(Surv(duration, status) ~ type_of_breast_surgery + chemotherapy +
+                       hormone_therapy + radio_therapy, data = df_subset[df_subset$tumor_stage==4,])
+```
+
+```{r}
+summary(cox_group_4)
+
+```
+> Unfortunately, there is no significant treatment for patient at stage 4. We can have a look on the models with univariate cox model for each treatment alone.
+
+```{r include=FALSE}
+treatments <- c("type_of_breast_surgery" , "chemotherapy" , "hormone_therapy" , "radio_therapy")
+univ_formulas <- sapply(treatments,
+                        function(x) as.formula(paste('Surv(duration, status)~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){coxph(x, data = df_subset[df_subset$tumor_stage==4,])})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          x <- summary(x)
+                          p.value<-signif(x$wald["pvalue"], digits=2)
+                          wald.test<-signif(x$wald["test"], digits=2)
+                          beta<-signif(x$coef[1], digits=2);#coeficient beta
+                          HR <-signif(x$coef[2], digits=2);#exp(beta)
+                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
+                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
+                          HR <- paste0(HR, " (", 
+                                       HR.confint.lower, "-", HR.confint.upper, ")")
+                          res<-c(beta, HR, wald.test, p.value)
+                          names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+```
+
+> Same conclusion. No significant treatment.
+
+# Cox model  (TO BE REMOVED)
+
+We will check assumptions on the final model for patients at tumor stage 2.
+
+```{r}
+cox_group_2
+```
+
+## Testing proportional hazard
+
+### Check the proportional hazard with a kaplan meier 
+
+We will plot a log-log plot and check if the two survival curves are parallels.
+
+
+
+```{r}
+km_breast_surgery <- survfit(Surv(duration, status) ~ type_of_breast_surgery, data = df_subset[df_subset$tumor_stage == 2, ])
+ggsurvplot(km_breast_surgery, fun = "cloglog")
+```
+
+
+> A first look gives us good chance to have proportional hazards. Let's have a look on the Schoenfeld residuals over time.
+
+```{r}
+test.ph <- cox.zph(cox_group_2)
+ggcoxzph(test.ph)
+```
+
+
+# With new model for cox group 2 (TO BE REMOVED)
+
+```{r}
+cox_group_2_bis <-  coxph(Surv(duration, status) ~ type_of_breast_surgery + hormone_therapy , data = df_subset[df_subset$tumor_stage==2,])
+```
+
+```{r}
+cox_group_2_bis
+```
+
+
+```{r}
+test.ph_bis <- cox.zph(cox_group_2_bis)
+ggcoxzph(test.ph_bis)
+```
+
+## Schoenfeld test on all models
+```{r}
+test.ph_1 <- cox.zph(cox_group_1)
+test.ph_2 <- cox.zph(cox_group_2)
+test.ph_3 <- cox.zph(cox_group_3)
+test.ph_4 <- cox.zph(cox_group_4)
+
+test.ph_1
+test.ph_2
+test.ph_bis
+test.ph_3
+test.ph_4
+```
+
+
+
+We can see we are centered around zero and all residuals are between $+/- 2\sigma$ and the p-valueis 0.79 (not significant) for this test which indicates we can accept H0, that is there is a proportional hazard.
+
+### Conclusion
+We can accept the validity of the assumptions for the cox model to define the treatment by breast surgery for the group of patients defined by having a tumor stage 2.
+
+
+# Conclusion (WARNING TO BE UPDATE)
+
+
+
+We wanted to propose the best combination of treatments depending on characteristics of people (age, tumor stage, side of the primary tumor and type of cancer).
+
+First we have check the impact of the having a chemotherapy on all patients regardless any other features. It shows at the first sight it has a significant and negative influence on the survival time as half of the patient with chemotherapy were died after 163 months against 300 for those without chemotherapy.
+
+It is surprising, but we have to be careful it is only a correlation and not a causality.
+
+Second We have  define which of these characteristics were the most significant for the survival time and we have kept only the tumor stage which were highly significant (p value $2e-16$). 
+
+Thanks to this analysis, we have designed four groups depending on their tumor stage.
+
+Then we have checked for the best combination of treatments for each of these groups by starting from additive models and applying variables selections with a step wise approach by the the Akaike criterion.
+
+Globally we have observed patients following a chemotherapy for all groups is significant and has a negative impact i.e. it decreases the survival time. Only the hormone therapy seems to have a significant(p-value 0.0019 ) and positive impact (decrease the risk by 3) for patients having a tumor stage 3.
+
+From this conclusion, we may infer that it should be interesting to check these treatments for more detailed groups with more characteristics discriminating them than only the tumor stage, otherwise the chemotherapy would have no reasons to exist.
+
